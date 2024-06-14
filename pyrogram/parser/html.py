@@ -57,7 +57,6 @@ class Parser(HTMLParser):
             entity = raw.types.MessageEntityStrike
         elif tag == "blockquote":
             entity = raw.types.MessageEntityBlockquote
-            extra["collapsed"] = bool("expandable" in attrs.keys())
         elif tag == "code":
             entity = raw.types.MessageEntityCode
         elif tag == "pre":
@@ -132,7 +131,7 @@ class HTML:
             for tag, entities in parser.tag_entities.items():
                 unclosed_tags.append(f"<{tag}> (x{len(entities)})")
 
-            log.info("Unclosed tags: %s", ", ".join(unclosed_tags))
+            log.warning("Unclosed tags: %s", ", ".join(unclosed_tags))
 
         entities = []
 
@@ -177,10 +176,6 @@ class HTML:
                 name = entity_type.name.lower()
                 language = getattr(entity, "language", "") or ""
                 start_tag = f'<{name} language="{language}">' if language else f"<{name}>"
-                end_tag = f"</{name}>"
-            elif entity_type == MessageEntityType.EXPANDABLE_BLOCKQUOTE:
-                name = "blockquote"
-                start_tag = f"<{name} expandable>"
                 end_tag = f"</{name}>"
             elif entity_type in (
                 MessageEntityType.CODE,
