@@ -134,19 +134,23 @@ class SaveFile:
 
         file_total_parts = int(math.ceil(file_size / part_size))
         is_big = file_size > 10 * 1024 * 1024
+        pool_size = 3 if is_big else 1
         workers_count = 4 if is_big else 1
         is_missing_part = file_id is not None
         file_id = file_id or self.rnd_id()
         md5_sum = md5() if not is_big and not is_missing_part else None
-        session = Session(
-            self, await self.storage.dc_id(), await self.storage.auth_key(),
-            await self.storage.test_mode(), is_media=True
-        )
-        workers = [self.loop.create_task(worker(session)) for _ in range(workers_count)]
-        queue = asyncio.Queue(1)
+        pool = [
+            Session(
+                self, await self.storage.dc_id(), await self.storage.auth_key(),
+                await self.storage.test_mode(), is_media=True
+            ) for _ in range(pool_size)
+        ]
+        workers = [self.loop.create_task(worker(session)) for session in pool for _ in range(workers_count)]
+        queue = asyncio.Queue(16)
 
         try:
-            await session.start()
+            for session in pool:
+                await session.start()
 
             fp.seek(part_size * file_part)
 
@@ -219,7 +223,8 @@ class SaveFile:
 
             await asyncio.gather(*workers)
 
-            await session.stop()
+            for session in pool:
+                await session.stop()
 
             if isinstance(path, (str, PurePath)):
                 fp.close()
