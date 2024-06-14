@@ -16,10 +16,11 @@
 #  You should have received a copy of the GNU Lesser General Public License
 #  along with Pyrogram.  If not, see <http://www.gnu.org/licenses/>.
 
-import asyncio
-import io
 import os
 import re
+import io
+import asyncio
+import io
 
 import pyrogram
 from pyrogram import raw
@@ -79,6 +80,8 @@ class EditInlineMedia:
         caption = media.caption
         parse_mode = media.parse_mode
 
+        is_photo = isinstance(media, types.InputMediaPhoto)
+
         is_bytes_io = isinstance(media.media, io.BytesIO)
         is_uploaded_file = is_bytes_io or os.path.isfile(media.media)
 
@@ -96,16 +99,15 @@ class EditInlineMedia:
         else:
             filename_attribute = []
 
-        if isinstance(media, types.InputMediaPhoto):
+
+        if is_photo:
             if is_uploaded_file:
                 media = raw.types.InputMediaUploadedPhoto(
-                    file=await self.save_file(media.media),
-                    spoiler=media.has_spoiler
+                    file=await self.save_file(media.media)
                 )
             elif is_external_url:
                 media = raw.types.InputMediaPhotoExternal(
-                    url=media.media,
-                    spoiler=media.has_spoiler
+                    url=media.media
                 )
             else:
                 media = utils.get_input_media_from_file_id(media.media, FileType.PHOTO)
@@ -115,20 +117,18 @@ class EditInlineMedia:
                     mime_type=(None if is_bytes_io else self.guess_mime_type(media.media)) or "video/mp4",
                     thumb=await self.save_file(media.thumb),
                     file=await self.save_file(media.media),
-                    spoiler=media.has_spoiler,
                     attributes=[
-                                   raw.types.DocumentAttributeVideo(
-                                       supports_streaming=media.supports_streaming or None,
-                                       duration=media.duration,
-                                       w=media.width,
-                                       h=media.height
-                                   )
-                               ] + filename_attribute
+                        raw.types.DocumentAttributeVideo(
+                            supports_streaming=media.supports_streaming or None,
+                            duration=media.duration,
+                            w=media.width,
+                            h=media.height
+                        )
+                    ] + filename_attribute
                 )
             elif is_external_url:
                 media = raw.types.InputMediaDocumentExternal(
-                    url=media.media,
-                    spoiler=media.has_spoiler
+                    url=media.media
                 )
             else:
                 media = utils.get_input_media_from_file_id(media.media, FileType.VIDEO)
@@ -139,12 +139,12 @@ class EditInlineMedia:
                     thumb=await self.save_file(media.thumb),
                     file=await self.save_file(media.media),
                     attributes=[
-                                   raw.types.DocumentAttributeAudio(
-                                       duration=media.duration,
-                                       performer=media.performer,
-                                       title=media.title
-                                   )
-                               ] + filename_attribute
+                        raw.types.DocumentAttributeAudio(
+                            duration=media.duration,
+                            performer=media.performer,
+                            title=media.title
+                        )
+                    ] + filename_attribute
                 )
             elif is_external_url:
                 media = raw.types.InputMediaDocumentExternal(
@@ -158,22 +158,20 @@ class EditInlineMedia:
                     mime_type=(None if is_bytes_io else self.guess_mime_type(media.media)) or "video/mp4",
                     thumb=await self.save_file(media.thumb),
                     file=await self.save_file(media.media),
-                    spoiler=media.has_spoiler,
                     attributes=[
-                                   raw.types.DocumentAttributeVideo(
-                                       supports_streaming=True,
-                                       duration=media.duration,
-                                       w=media.width,
-                                       h=media.height
-                                   ),
-                                   raw.types.DocumentAttributeAnimated()
-                               ] + filename_attribute,
+                        raw.types.DocumentAttributeVideo(
+                            supports_streaming=True,
+                            duration=media.duration,
+                            w=media.width,
+                            h=media.height
+                        ),
+                        raw.types.DocumentAttributeAnimated()
+                    ] + filename_attribute,
                     nosound_video=True
                 )
             elif is_external_url:
                 media = raw.types.InputMediaDocumentExternal(
-                    url=media.media,
-                    spoiler=media.has_spoiler
+                    url=media.media
                 )
             else:
                 media = utils.get_input_media_from_file_id(media.media, FileType.ANIMATION)
@@ -198,6 +196,7 @@ class EditInlineMedia:
 
         session = await get_session(self, dc_id)
 
+
         if is_uploaded_file:
             uploaded_media = await self.invoke(
                 raw.functions.messages.UploadMedia(
@@ -211,15 +210,13 @@ class EditInlineMedia:
                     id=uploaded_media.photo.id,
                     access_hash=uploaded_media.photo.access_hash,
                     file_reference=uploaded_media.photo.file_reference
-                ),
-                spoiler=getattr(media, "has_spoiler", None)
-            ) if isinstance(media, types.InputMediaPhoto) else raw.types.InputMediaDocument(
+                )
+            ) if is_photo else raw.types.InputMediaDocument(
                 id=raw.types.InputDocument(
                     id=uploaded_media.document.id,
                     access_hash=uploaded_media.document.access_hash,
-                    file_reference=uploaded_media.document.file_reference
-                ),
-                spoiler=getattr(media, "has_spoiler", None)
+                    file_reference=uploaded_media.document.file_reference                    
+                )
             )
         else:
             actual_media = media
