@@ -17,7 +17,6 @@
 #  along with Pyrogram.  If not, see <http://www.gnu.org/licenses/>.
 
 import asyncio
-import bisect
 import logging
 import os
 from hashlib import sha1
@@ -33,7 +32,7 @@ from pyrogram.errors import (
 )
 from pyrogram.raw.all import layer
 from pyrogram.raw.core import TLObject, MsgContainer, Int, FutureSalts
-from .internals import MsgId, MsgFactory
+from .internals import MsgFactory
 
 log = logging.getLogger(__name__)
 
@@ -45,19 +44,12 @@ class Result:
 
 
 class Session:
-    START_TIMEOUT = 5
+    START_TIMEOUT = 1
     WAIT_TIMEOUT = 15
     SLEEP_THRESHOLD = 10
-    MAX_RETRIES = 10
-    ACKS_THRESHOLD = 10
+    MAX_RETRIES = 5
+    ACKS_THRESHOLD = 8
     PING_INTERVAL = 5
-    STORED_MSG_IDS_MAX_SIZE = 1000 * 2
-
-    TRANSPORT_ERRORS = {
-        404: "auth key not found",
-        429: "transport flood",
-        444: "invalid DC"
-    }
 
     def __init__(
         self,
@@ -157,8 +149,6 @@ class Session:
     async def stop(self):
         self.is_started.clear()
 
-        self.stored_msg_ids.clear()
-
         self.ping_task_event.set()
 
         if self.ping_task is not None:
@@ -166,10 +156,13 @@ class Session:
 
         self.ping_task_event.clear()
 
-        await self.connection.close()
+        self.connection.close()
 
         if self.recv_task:
             await self.recv_task
+
+        for i in self.results.values():
+            i.event.set()
 
         if not self.is_media and callable(self.client.disconnect_handler):
             try:
@@ -184,14 +177,19 @@ class Session:
         await self.start()
 
     async def handle_packet(self, packet):
-        data = await self.loop.run_in_executor(
-            pyrogram.crypto_executor,
-            mtproto.unpack,
-            BytesIO(packet),
-            self.session_id,
-            self.auth_key,
-            self.auth_key_id
-        )
+        try:
+            data = await self.loop.run_in_executor(
+                pyrogram.crypto_executor,
+                mtproto.unpack,
+                BytesIO(packet),
+                self.session_id,
+                self.auth_key,
+                self.auth_key_id,
+                self.stored_msg_ids
+            )
+        except SecurityCheckMismatch as e:
+            log.warning("Discarding packet: %s", e)
+            return
 
         messages = (
             data.body.messages
@@ -207,33 +205,6 @@ class Session:
                     continue
                 else:
                     self.pending_acks.add(msg.msg_id)
-
-            try:
-                if len(self.stored_msg_ids) > Session.STORED_MSG_IDS_MAX_SIZE:
-                    del self.stored_msg_ids[:Session.STORED_MSG_IDS_MAX_SIZE // 2]
-
-                if self.stored_msg_ids:
-                    if msg.msg_id < self.stored_msg_ids[0]:
-                        raise SecurityCheckMismatch("The msg_id is lower than all the stored values")
-
-                    if msg.msg_id in self.stored_msg_ids:
-                        raise SecurityCheckMismatch("The msg_id is equal to any of the stored values")
-
-                    time_diff = (msg.msg_id - MsgId()) / 2 ** 32
-
-                    if time_diff > 30:
-                        raise SecurityCheckMismatch("The msg_id belongs to over 30 seconds in the future. "
-                                                    "Most likely the client time has to be synchronized.")
-
-                    if time_diff < -300:
-                        raise SecurityCheckMismatch("The msg_id belongs to over 300 seconds in the past. "
-                                                    "Most likely the client time has to be synchronized.")
-            except SecurityCheckMismatch as e:
-                log.warning("Discarding packet: %s", e)
-                await self.connection.close()
-                return
-            else:
-                bisect.insort(self.stored_msg_ids, msg.msg_id)
 
             if isinstance(msg.body, (raw.types.MsgDetailedInfo, raw.types.MsgNewDetailedInfo)):
                 self.pending_acks.add(msg.body.answer_msg_id)
@@ -298,12 +269,7 @@ class Session:
 
             if packet is None or len(packet) == 4:
                 if packet:
-                    error_code = -Int.read(BytesIO(packet))
-
-                    log.warning(
-                        "Server sent transport error: %s (%s)",
-                        error_code, Session.TRANSPORT_ERRORS.get(error_code, "unknown error")
-                    )
+                    log.warning('Server sent "%s"', Int.read(BytesIO(packet)))
 
                 if self.is_started.is_set():
                     self.loop.create_task(self.restart())
@@ -344,26 +310,23 @@ class Session:
                 await asyncio.wait_for(self.results[msg_id].event.wait(), timeout)
             except asyncio.TimeoutError:
                 pass
-
-            result = self.results.pop(msg_id).value
+            finally:
+                result = self.results.pop(msg_id).value
 
             if result is None:
                 raise TimeoutError("Request timed out")
-
-            if isinstance(result, raw.types.RpcError):
+            elif isinstance(result, raw.types.RpcError):
                 if isinstance(data, (raw.functions.InvokeWithoutUpdates, raw.functions.InvokeWithTakeout)):
                     data = data.query
 
                 RPCError.raise_it(result, type(data))
-
-            if isinstance(result, raw.types.BadMsgNotification):
-                log.warning("%s: %s", BadMsgNotification.__name__, BadMsgNotification(result.error_code))
-
-            if isinstance(result, raw.types.BadServerSalt):
+            elif isinstance(result, raw.types.BadMsgNotification):
+                raise BadMsgNotification(result.error_code)
+            elif isinstance(result, raw.types.BadServerSalt):
                 self.salt = result.new_server_salt
                 return await self.send(data, wait_response, timeout)
-
-            return result
+            else:
+                return result
 
     async def invoke(
         self,
