@@ -31,7 +31,7 @@ from pyrogram.connection import Connection
 from pyrogram.crypto import mtproto
 from pyrogram.errors import (
     RPCError, InternalServerError, AuthKeyDuplicated,
-    FloodWait, FloodPremiumWait,
+    FloodWait,
     ServiceUnavailable, BadMsgNotification,
     SecurityCheckMismatch
 )
@@ -407,7 +407,7 @@ class Session:
         while True:
             try:
                 return await self.send(query, timeout=timeout)
-            except (FloodWait, FloodPremiumWait) as e:
+            except (FloodWait) as e:
                 amount = e.value
 
                 if amount > sleep_threshold >= 0:
